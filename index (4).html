@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Auditory Racer — Accessible Driving Game</title>
+<style>
+:root { color-scheme: dark; --bg:#10151d; --panel:#1c2633; --text:#fff; --accent:#ffd43b; --muted:#c7d0dc; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui,-apple-system,BlinkMacSystemFont,sans-serif; line-height:1.45; }
+main { max-width:760px; margin:0 auto; padding:18px; }
+h1 { font-size:1.8rem; margin:.2rem 0 .5rem; }
+p { color:var(--muted); }
+.panel { background:var(--panel); border:2px solid #405064; border-radius:18px; padding:16px; margin:14px 0; }
+#status { font-size:1.15rem; font-weight:650; min-height:3.2em; }
+#speedline { font-size:1rem; color:var(--accent); }
+.controls { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+button { min-height:76px; border:3px solid #d9e2ee; border-radius:16px; background:#26364a; color:#fff; font:700 1.15rem/1.25 system-ui,sans-serif; padding:14px 10px; touch-action:manipulation; }
+button:focus-visible { outline:5px solid var(--accent); outline-offset:3px; }
+button:active { background:#435a75; }
+button.primary { background:#245b42; border-color:#8be0b1; }
+button.warn { background:#673535; border-color:#ffaaaa; }
+button.utility { min-height:56px; font-size:1rem; }
+.row { display:flex; gap:10px; flex-wrap:wrap; }
+.row button { flex:1; }
+.small { font-size:.92rem; }
+.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+@media (max-width:420px) { main { padding:12px; } button { min-height:82px; font-size:1.05rem; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Auditory Racer</h1>
+  <p>Designed for a blind player using iPad VoiceOver and touch gestures.</p>
+  <section class="panel" aria-label="Race information">
+    <div id="status" role="status" aria-live="polite" aria-atomic="true">Welcome to Auditory Racer. Choose Start Race to begin.</div>
+    <div id="speedline">Speed: 0 · Distance: 0 of 5 checkpoints</div>
+  </section>
+  <section class="panel" aria-labelledby="startHeading">
+    <h2 id="startHeading">Race controls</h2>
+    <div class="row">
+      <button class="primary" id="startBtn" type="button">Start race</button>
+      <button class="utility" id="repeatBtn" type="button">Repeat instructions</button>
+    </div>
+    <p class="small">With VoiceOver on: swipe to explore a button, then double-tap to activate it. Controls are standard buttons.</p>
+  </section>
+  <section class="panel" aria-labelledby="driveHeading">
+    <h2 id="driveHeading">Drive</h2>
+    <div class="controls">
+      <button id="leftBtn" type="button" aria-label="Steer left">Steer left</button>
+      <button id="rightBtn" type="button" aria-label="Steer right">Steer right</button>
+      <button id="accelerateBtn" type="button" class="primary" aria-pressed="false">Accelerate: off</button>
+      <button id="brakeBtn" type="button" class="warn">Brake</button>
+    </div>
+    <p class="small">Steering is a single action. Accelerate toggles on or off so it works with VoiceOver double-tap. Brake slows the car.</p>
+  </section>
+  <section class="panel" aria-labelledby="helpHeading">
+    <h2 id="helpHeading">Sound and help</h2>
+    <div class="row">
+      <button id="soundBtn" class="utility" type="button" aria-pressed="true">Sound effects: on</button>
+      <button id="helpBtn" class="utility" type="button">How to play</button>
+      <button id="resetBtn" class="utility" type="button">Restart race</button>
+    </div>
+  </section>
+  <p class="small">Prototype note: best tested in Safari on the iPad with VoiceOver enabled and the device volume turned up. Speech and sound depend on browser/device settings.</p>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const status = $('status'), speedline = $('speedline');
+  let running = false, accelerating = false, speed = 0, checkpoint = 0, lane = 0, soundOn = true, tick = null, lastCue = '';
+  let audioCtx = null;
+  function say(text, interrupt=true) {
+    status.textContent = text;
+    if ('speechSynthesis' in window) {
+      if (interrupt) speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text); u.rate = 0.92; u.pitch = 1; u.volume = 1;
+      speechSynthesis.speak(u);
+    }
+  }
+  function tone(freq=440, duration=.14, type='sine') {
+    if (!soundOn) return;
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+      osc.type = type; osc.frequency.value = freq; gain.gain.setValueAtTime(.08, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(.001, audioCtx.currentTime + duration);
+      osc.connect(gain); gain.connect(audioCtx.destination); osc.start(); osc.stop(audioCtx.currentTime + duration);
+    } catch(e) {}
+  }
+  function update() {
+    speedline.textContent = `Speed: ${speed} · Checkpoints: ${checkpoint} of 5`;
+    $('accelerateBtn').textContent = `Accelerate: ${accelerating ? 'on' : 'off'}`;
+    $('accelerateBtn').setAttribute('aria-pressed', String(accelerating));
+  }
+  function stopRace(message='Race paused.') { running=false; accelerating=false; if (tick) clearInterval(tick); tick=null; update(); say(message); }
+  function startRace() {
+    if (running) { say('The race is already underway. Use the driving controls.'); return; }
+    running=true; accelerating=false; speed=0; checkpoint=0; lane=0; lastCue=''; update();
+    say('Race started. You are on a straight road. Double-tap Accelerate to turn acceleration on. Listen for turn instructions.');
+    tone(330,.2,'sawtooth'); setTimeout(()=>tone(520,.25,'sawtooth'),220);
+    tick=setInterval(() => {
+      if (!running) return;
+      if (accelerating) speed = Math.min(5, speed + 1); else speed = Math.max(0, speed - 1);
+      if (speed > 0) checkpoint += speed >= 4 ? 1 : (speed >= 2 ? .5 : .25);
+      const whole = Math.floor(checkpoint);
+      update();
+      if (whole >= 1 && lastCue !== 'turn1') { lastCue='turn1'; say('Gentle left turn coming up. Double-tap Steer left when you are ready.'); tone(260,.2); }
+      if (whole >= 2 && lastCue !== 'turn2') { lastCue='turn2'; say('Obstacle ahead. Slow down with Brake, then steer right.'); tone(180,.3,'square'); }
+      if (whole >= 3 && lastCue !== 'turn3') { lastCue='turn3'; say('Sharp right turn coming up. Double-tap Steer right.'); tone(300,.18); }
+      if (whole >= 4 && lastCue !== 'turn4') { lastCue='turn4'; say('Final stretch. Keep going toward the finish line.'); tone(500,.15); }
+      if (checkpoint >= 5) { checkpoint=5; running=false; accelerating=false; clearInterval(tick); tick=null; update(); say('You crossed the finish line! Great driving. You finished the race. Double-tap Restart race to play again.'); tone(660,.2); setTimeout(()=>tone(880,.3),250); }
+    }, 1800);
+  }
+  $('startBtn').addEventListener('click', startRace);
+  $('repeatBtn').addEventListener('click', () => say('To play, start the race. Double-tap Accelerate to toggle speed on. Use Steer left or Steer right when you hear a turn. Use Brake to slow down. Sound cues and spoken directions guide you to the finish.'));
+  $('helpBtn').addEventListener('click', () => say('This game is designed for VoiceOver. Swipe to explore controls and double-tap to activate. Steer left and right are single actions. Accelerate toggles on or off. Brake slows you down. You can repeat instructions any time.'));
+  $('leftBtn').addEventListener('click', () => { if (!running) { say('Start the race before steering.'); return; } lane=-1; tone(220,.13); say('Steering left.'); });
+  $('rightBtn').addEventListener('click', () => { if (!running) { say('Start the race before steering.'); return; } lane=1; tone(300,.13); say('Steering right.'); });
+  $('accelerateBtn').addEventListener('click', () => { if (!running) { say('Start the race before accelerating.'); return; } accelerating=!accelerating; update(); tone(accelerating?600:300,.12,'sawtooth'); say(accelerating?'Acceleration on. Engine revving.':'Acceleration off. Coasting.'); });
+  $('brakeBtn').addEventListener('click', () => { if (!running) { say('The race is not running.'); return; } speed=Math.max(0,speed-2); accelerating=false; update(); tone(140,.25,'square'); say('Braking. Speed reduced.'); });
+  $('soundBtn').addEventListener('click', () => { soundOn=!soundOn; $('soundBtn').textContent=`Sound effects: ${soundOn?'on':'off'}`; $('soundBtn').setAttribute('aria-pressed',String(soundOn)); say(`Sound effects ${soundOn?'on':'off'}.`); if(soundOn) tone(500,.15); });
+  $('resetBtn').addEventListener('click', () => { if(tick) clearInterval(tick); tick=null; running=false; accelerating=false; speed=0; checkpoint=0; lane=0; lastCue=''; update(); say('Race reset. Double-tap Start race when you are ready.'); });
+  update();
+})();
+</script>
+</body>
+</html>
